@@ -281,6 +281,3 @@ fin3/
 
 ---
 
-## 📝 License
-
-MIT License — Built for educational/hackathon purposes.
