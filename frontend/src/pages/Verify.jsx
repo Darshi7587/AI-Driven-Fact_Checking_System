@@ -110,7 +110,17 @@ export default function Verify() {
       toast.success('Verification complete!')
       navigate(`/report/${res.data.id}`)
     } catch (err) {
-      const msg = err.response?.data?.detail || 'Verification failed. Check your API key.'
+      const detail = err.response?.data?.detail
+      let msg = 'Verification failed. Please try again.'
+      if (typeof detail === 'string') {
+        msg = detail
+      } else if (Array.isArray(detail) && detail.length > 0) {
+        msg = detail.map((d) => d?.msg).filter(Boolean).join('; ') || msg
+      } else if (err.response?.status === 422) {
+        msg = 'Input could not be processed. Please provide clearer factual statements or a publicly accessible URL.'
+      } else if (err.response?.status === 401) {
+        msg = 'Session expired. Please login again.'
+      }
       toast.error(msg)
     } finally {
       setLoading(false)
@@ -190,7 +200,7 @@ export default function Verify() {
               <div className="flex items-center justify-between mt-4">
                 <div className="flex items-center gap-2 text-slate-500 text-xs">
                   <Shield size={12} className="text-primary-400" />
-                  Multi-agent AI verification • DuckDuckGo search • Gemini 2.0 Flash
+                  Multi-agent verification pipeline • Tavily + DuckDuckGo evidence retrieval • Gemini with local fallback
                 </div>
                 <motion.button
                   type="submit"

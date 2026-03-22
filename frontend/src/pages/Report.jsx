@@ -14,7 +14,6 @@ import {
   BarChart, Bar, XAxis, YAxis
 } from 'recharts'
 import jsPDF from 'jspdf'
-import html2canvas from 'html2canvas'
 import toast from 'react-hot-toast'
 
 const STATUS_CONFIG = {
@@ -23,6 +22,39 @@ const STATUS_CONFIG = {
   PARTIALLY_TRUE: { label: 'Partially True', color: '#f59e0b', bg: 'bg-amber-500/10', border: 'border-amber-500/30', text: 'text-amber-400', badge: 'badge-partial', icon: AlertTriangle },
   UNVERIFIABLE: { label: 'Unverifiable', color: '#64748b', bg: 'bg-slate-500/10', border: 'border-slate-500/30', text: 'text-slate-400', badge: 'badge-unverifiable', icon: HelpCircle },
   CONFLICTING: { label: 'Conflicting', color: '#a855f7', bg: 'bg-purple-500/10', border: 'border-purple-500/30', text: 'text-purple-400', badge: 'badge-conflicting', icon: AlertOctagon }
+}
+
+const PDF_PRESETS = {
+  detailed: {
+    label: 'Detailed Evidence Report',
+    fileSuffix: 'Detailed',
+    includeReasoning: true,
+    includeTemporalNote: true,
+    includeQueries: true,
+    includeSources: true,
+    sourceLimit: 999,
+    snippetLimit: 0,
+  },
+  standard: {
+    label: 'Analyst Review Report',
+    fileSuffix: 'Standard',
+    includeReasoning: true,
+    includeTemporalNote: true,
+    includeQueries: true,
+    includeSources: true,
+    sourceLimit: 3,
+    snippetLimit: 500,
+  },
+  summary: {
+    label: 'Executive Snapshot',
+    fileSuffix: 'Summary',
+    includeReasoning: false,
+    includeTemporalNote: false,
+    includeQueries: false,
+    includeSources: true,
+    sourceLimit: 2,
+    snippetLimit: 0,
+  },
 }
 
 function ClaimCard({ claim, index }) {
@@ -161,6 +193,22 @@ function ClaimCard({ claim, index }) {
                     {claim.sources.map((src, i) => (
                       <div key={i} className="p-3 bg-white/3 rounded-xl border border-white/5 hover:border-white/10 transition-colors">
                         <div className="flex items-start justify-between gap-3">
+                          {src.image_url && (
+                            <a
+                              href={src.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="shrink-0"
+                            >
+                              <img
+                                src={src.image_url}
+                                alt={src.title || 'Source preview'}
+                                className="w-24 h-16 object-cover rounded-lg border border-white/10"
+                                loading="lazy"
+                                referrerPolicy="no-referrer"
+                              />
+                            </a>
+                          )}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
                               <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
@@ -198,12 +246,24 @@ function ClaimCard({ claim, index }) {
   )
 }
 
+function detectionTone(probability = 0) {
+  if (probability >= 0.65) {
+    return { chip: 'bg-red-500/20 text-red-300 border-red-500/30', text: 'Likely AI/Synthetic' }
+  }
+  if (probability <= 0.35) {
+    return { chip: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30', text: 'Likely Authentic/Human' }
+  }
+  return { chip: 'bg-amber-500/20 text-amber-300 border-amber-500/30', text: 'Uncertain' }
+}
+
 export default function Report() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState(false)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [showMethodology, setShowMethodology] = useState(false)
 
   useEffect(() => {
     const fetchReport = async () => {
@@ -220,19 +280,185 @@ export default function Report() {
     fetchReport()
   }, [id])
 
-  const exportPDF = async () => {
+  const exportPDF = async (presetKey = 'detailed') => {
     setExporting(true)
+    setExportMenuOpen(false)
     try {
-      const element = document.getElementById('report-content')
-      const canvas = await html2canvas(element, { backgroundColor: '#080d1a', scale: 1.5 })
-      const imgData = canvas.toDataURL('image/png')
+      const preset = PDF_PRESETS[presetKey] || PDF_PRESETS.detailed
       const pdf = new jsPDF('p', 'mm', 'a4')
-      const pdfWidth = pdf.internal.pageSize.getWidth()
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width
-      
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight)
-      pdf.save(`VeritAI-Report-${id.slice(0, 8)}.pdf`)
-      toast.success('PDF exported!')
+      const pageWidth = pdf.internal.pageSize.getWidth()
+      const pageHeight = pdf.internal.pageSize.getHeight()
+      const margin = 12
+      const maxTextWidth = pageWidth - margin * 2
+      let y = margin
+
+      const clipText = (text, maxChars = 0) => {
+        const safe = String(text || '').trim()
+        if (!maxChars || safe.length <= maxChars) return safe
+        return `${safe.slice(0, maxChars)}...`
+      }
+
+      const ensureSpace = (needed = 6) => {
+        if (y + needed > pageHeight - margin) {
+          pdf.addPage()
+          y = margin
+        }
+      }
+
+      const addWrappedText = (text, opts = {}) => {
+        const {
+          fontSize = 10,
+          fontStyle = 'normal',
+          color = [15, 23, 42],
+          indent = 0,
+          lineHeight = 5,
+          spacingAfter = 1,
+        } = opts
+
+        const safeText = String(text ?? '').trim()
+        if (!safeText) return
+
+        pdf.setFont('helvetica', fontStyle)
+        pdf.setFontSize(fontSize)
+        pdf.setTextColor(...color)
+
+        const lines = pdf.splitTextToSize(safeText, maxTextWidth - indent)
+        for (const line of lines) {
+          ensureSpace(lineHeight)
+          pdf.text(line, margin + indent, y)
+          y += lineHeight
+        }
+        y += spacingAfter
+      }
+
+      const addDivider = () => {
+        ensureSpace(3)
+        pdf.setDrawColor(203, 213, 225)
+        pdf.line(margin, y, pageWidth - margin, y)
+        y += 3
+      }
+
+      const statusLabel = (status) => {
+        const labels = {
+          TRUE: 'True',
+          FALSE: 'False',
+          PARTIALLY_TRUE: 'Partially True',
+          UNVERIFIABLE: 'Unverifiable',
+          CONFLICTING: 'Conflicting',
+        }
+        return labels[status] || 'Unverifiable'
+      }
+
+      const generatedAt = new Date().toLocaleString()
+      addWrappedText('VeritAI Fact-Check Report', { fontSize: 16, fontStyle: 'bold', color: [2, 6, 23], lineHeight: 7, spacingAfter: 2 })
+      addWrappedText(`Export Type: ${preset.label}`, { fontSize: 10, fontStyle: 'bold', color: [30, 64, 175], spacingAfter: 1 })
+      addWrappedText(`Report ID: ${id}`, { fontSize: 9, color: [71, 85, 105] })
+      addWrappedText(`Generated: ${generatedAt}`, { fontSize: 9, color: [71, 85, 105] })
+      if (report.verified_as_of) {
+        addWrappedText(`Verified As Of: ${report.verified_as_of}`, { fontSize: 9, color: [71, 85, 105] })
+      }
+      addDivider()
+
+      addWrappedText('Summary', { fontSize: 13, fontStyle: 'bold', color: [15, 23, 42], spacingAfter: 2 })
+      addWrappedText(`Overall Accuracy: ${Math.round((report.overall_accuracy || 0) * 100)}%`, { fontSize: 10 })
+      addWrappedText(`Total Claims: ${report.total_claims || 0}`, { fontSize: 10 })
+      addWrappedText(`True: ${report.true_count || 0} | False: ${report.false_count || 0} | Partial: ${report.partial_count || 0} | Unverifiable: ${report.unverifiable_count || 0} | Conflicting: ${report.conflicting_count || 0}`, { fontSize: 10 })
+      addWrappedText(`Hallucinations: ${report.hallucination_count || 0} | Processing Time: ${report.processing_time || 0}s`, { fontSize: 10 })
+      if (report.ai_text_detection) {
+        addWrappedText(`AI-Generated Text Probability: ${Math.round((report.ai_text_detection.probability || 0) * 100)}% (${report.ai_text_detection.label || 'unknown'})`, { fontSize: 10 })
+      }
+      if (report.ai_media_detection) {
+        addWrappedText(`AI-Generated Media Probability: ${Math.round((report.ai_media_detection.overall_probability || 0) * 100)}% (${report.ai_media_detection.label || 'unknown'})`, { fontSize: 10 })
+      }
+
+      if (report.ai_text_detection?.indicators?.length) {
+        addWrappedText('Text Detection Indicators', { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
+        report.ai_text_detection.indicators.forEach((item) => {
+          addWrappedText(`- ${item}`, { fontSize: 9, color: [51, 65, 85], indent: 2, spacingAfter: 0.5 })
+        })
+      }
+
+      if (report.ai_media_detection?.items?.length && presetKey !== 'summary') {
+        addWrappedText('Media Detection Items', { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
+        report.ai_media_detection.items.slice(0, presetKey === 'detailed' ? 8 : 3).forEach((item, idx) => {
+          addWrappedText(
+            `${idx + 1}. ${item.type} | ${Math.round((item.synthetic_probability || 0) * 100)}% synthetic | ${item.domain}`,
+            { fontSize: 9, color: [51, 65, 85], indent: 2, spacingAfter: 0.5 }
+          )
+          if (item.url) {
+            addWrappedText(`URL: ${item.url}`, { fontSize: 8, color: [30, 64, 175], indent: 4, spacingAfter: 0.5 })
+          }
+        })
+      }
+
+      if (report.source_url) {
+        addWrappedText('Source URL', { fontSize: 11, fontStyle: 'bold', spacingAfter: 1 })
+        addWrappedText(report.source_url, { fontSize: 9, color: [30, 64, 175], spacingAfter: 2 })
+      }
+
+      addDivider()
+      addWrappedText(`Verified Claims (${report.claims?.length || 0})`, { fontSize: 13, fontStyle: 'bold', spacingAfter: 2 })
+
+      ;(report.claims || []).forEach((claim, claimIdx) => {
+        ensureSpace(10)
+        addWrappedText(`Claim ${claimIdx + 1}`, { fontSize: 12, fontStyle: 'bold', color: [15, 23, 42], spacingAfter: 1 })
+        addWrappedText(claim.text, { fontSize: 10, color: [2, 6, 23], spacingAfter: 2 })
+
+        const confidence = Math.round((claim.confidence || 0) * 100)
+        addWrappedText(
+          `Verdict: ${statusLabel(claim.status)} | Confidence: ${confidence}% | Temporal: ${claim.is_temporal ? 'Yes' : 'No'} | Hallucination: ${claim.is_hallucination ? 'Yes' : 'No'} | Conflicting: ${claim.conflicting_evidence ? 'Yes' : 'No'}`,
+          { fontSize: 9, color: [51, 65, 85], spacingAfter: 2 }
+        )
+
+        if (preset.includeReasoning && claim.reasoning) {
+          addWrappedText('AI Reasoning', { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
+          addWrappedText(clipText(claim.reasoning, presetKey === 'standard' ? 900 : 0), { fontSize: 9, color: [30, 41, 59], spacingAfter: 2 })
+        }
+
+        if (claim.key_finding) {
+          addWrappedText('Key Finding', { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
+          addWrappedText(claim.key_finding, { fontSize: 9, color: [30, 41, 59], spacingAfter: 2 })
+        }
+
+        if (preset.includeTemporalNote && claim.temporal_note) {
+          addWrappedText('Temporal Note', { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
+          addWrappedText(claim.temporal_note, { fontSize: 9, color: [30, 41, 59], spacingAfter: 2 })
+        }
+
+        if (preset.includeQueries && claim.search_queries?.length) {
+          addWrappedText('Search Queries Used', { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
+          claim.search_queries.forEach((query) => {
+            addWrappedText(`- ${query}`, { fontSize: 9, color: [51, 65, 85], indent: 2, spacingAfter: 0.5 })
+          })
+          y += 1
+        }
+
+        if (preset.includeSources && claim.sources?.length) {
+          const sources = claim.sources.slice(0, preset.sourceLimit)
+          addWrappedText(`Evidence Sources (${sources.length}${claim.sources.length > sources.length ? ` of ${claim.sources.length}` : ''})`, { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
+
+          sources.forEach((src, srcIdx) => {
+            ensureSpace(14)
+            addWrappedText(`Source ${srcIdx + 1} | ${Math.round((src.trust_score || 0) * 100)}% trust | ${src.domain || 'unknown domain'}`, {
+              fontSize: 9,
+              fontStyle: 'bold',
+              color: [15, 23, 42],
+              indent: 2,
+              spacingAfter: 0.5,
+            })
+            if (src.title) addWrappedText(`Title: ${src.title}`, { fontSize: 9, color: [51, 65, 85], indent: 4, spacingAfter: 0.5 })
+            if (src.url) addWrappedText(`URL: ${src.url}`, { fontSize: 8, color: [30, 64, 175], indent: 4, spacingAfter: 0.5 })
+            if (preset.snippetLimit !== 0 && src.snippet) {
+              addWrappedText(`Snippet: ${clipText(src.snippet, preset.snippetLimit)}`, { fontSize: 8, color: [71, 85, 105], indent: 4, spacingAfter: 1 })
+            }
+          })
+        }
+
+        addDivider()
+      })
+
+      pdf.save(`VeritAI-Report-${id.slice(0, 8)}-${preset.fileSuffix}.pdf`)
+      toast.success(`${preset.label} exported!`)
     } catch {
       toast.error('Export failed')
     }
@@ -259,6 +485,11 @@ export default function Report() {
   ].filter(d => d.value > 0)
 
   const accuracyPct = Math.round(report.overall_accuracy * 100)
+  const textDetection = report.ai_text_detection || { probability: 0, label: 'unknown', confidence: 0, indicators: [] }
+  const mediaDetection = report.ai_media_detection || { overall_probability: 0, label: 'not_applicable', analyzed_count: 0, items: [] }
+  const textAnalyzerPreviewImage = (mediaDetection.items || []).find((item) => item.type === 'image')?.url || null
+  const textTone = detectionTone(textDetection.probability)
+  const mediaTone = detectionTone(mediaDetection.overall_probability)
   const accuracyGrade = accuracyPct >= 80 ? { label: 'Highly Accurate', color: 'text-emerald-400' } :
                         accuracyPct >= 60 ? { label: 'Mostly Accurate', color: 'text-amber-400' } :
                         accuracyPct >= 40 ? { label: 'Partially Accurate', color: 'text-orange-400' } :
@@ -273,14 +504,35 @@ export default function Report() {
         </button>
         <div className="flex items-center gap-3">
           <span className="text-slate-500 text-xs">Report ID: {id.slice(0, 8)}...</span>
-          <motion.button
-            whileHover={{ scale: 1.03 }}
-            onClick={exportPDF}
-            disabled={exporting}
-            className="btn-secondary px-4 py-2 text-sm"
-          >
-            <Download size={14} /> {exporting ? 'Exporting...' : 'Export PDF'}
-          </motion.button>
+          <div className="relative">
+            <motion.button
+              whileHover={{ scale: 1.03 }}
+              onClick={() => setExportMenuOpen((v) => !v)}
+              disabled={exporting}
+              className="btn-secondary px-4 py-2 text-sm"
+            >
+              <Download size={14} /> {exporting ? 'Exporting...' : 'Export PDF'} <ChevronDown size={14} />
+            </motion.button>
+
+            {exportMenuOpen && !exporting && (
+              <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-white/10 rounded-xl shadow-xl overflow-hidden z-20">
+                {Object.entries(PDF_PRESETS).map(([key, preset]) => (
+                  <button
+                    key={key}
+                    onClick={() => exportPDF(key)}
+                    className="w-full text-left px-4 py-3 hover:bg-white/5 transition-colors"
+                  >
+                    <p className="text-slate-100 text-sm font-medium">{preset.label}</p>
+                    <p className="text-slate-500 text-xs mt-0.5">
+                      {key === 'detailed' ? 'Full claim reasoning, all sources, complete snippets' :
+                       key === 'standard' ? 'Condensed reasoning, top sources, trimmed snippets' :
+                       'Decision-focused summary, key findings, top sources'}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -329,6 +581,115 @@ export default function Report() {
                   <div className="text-slate-500 text-xs">{s.label}</div>
                 </div>
               ))}
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Bonus Detection Signals */}
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="glass-card p-6 mb-6"
+        >
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <h3 className="font-display font-bold text-white text-sm uppercase tracking-wide">AI Authenticity Signals</h3>
+            <button
+              onClick={() => setShowMethodology((v) => !v)}
+              className="text-xs text-slate-400 hover:text-slate-200 transition-colors flex items-center gap-1"
+            >
+              <HelpCircle size={12} /> {showMethodology ? 'Hide Methodology' : 'Show Methodology'}
+            </button>
+          </div>
+
+          {showMethodology && (
+            <div className="mb-4 p-3 rounded-xl border border-white/10 bg-slate-900/40">
+              <p className="text-slate-300 text-xs leading-relaxed">
+                Text detection uses stylometric heuristics (sentence length, lexical diversity, transition frequency, hedging language) to estimate a probability that text is AI-generated.
+                Media detection analyzes embedded image/audio/video URLs from the input page using source trust and synthetic-pattern indicators in URLs.
+                These are risk signals for triage, not forensic proof.
+              </p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-4 rounded-xl border border-white/10 bg-white/3">
+              <div className="flex items-center justify-between">
+                <p className="text-slate-300 text-sm font-medium">AI-Generated Text Detection</p>
+                <span className={`text-xs px-2 py-1 rounded-full border ${textTone.chip}`}>{textTone.text}</span>
+              </div>
+
+              <div className="mt-3 rounded-lg overflow-hidden border border-white/10 bg-slate-900/40">
+                {textAnalyzerPreviewImage ? (
+                  <img
+                    src={textAnalyzerPreviewImage}
+                    alt="Text analyzer media context"
+                    className="w-full h-24 object-cover"
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="h-24 flex items-center justify-center text-xs text-slate-500">
+                    No related preview image detected
+                  </div>
+                )}
+              </div>
+
+              <p className="mt-2 text-2xl font-display font-black text-white">{Math.round((textDetection.probability || 0) * 100)}%</p>
+              <p className="text-slate-500 text-xs">Method: {textDetection.method || 'heuristic-v1'}</p>
+              {textDetection.indicators?.length > 0 && (
+                <ul className="mt-3 space-y-1">
+                  {textDetection.indicators.slice(0, 3).map((ind, idx) => (
+                    <li key={idx} className="text-xs text-slate-400">- {ind}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="p-4 rounded-xl border border-white/10 bg-white/3">
+              <div className="flex items-center justify-between">
+                <p className="text-slate-300 text-sm font-medium">AI-Generated Media Detection</p>
+                <span className={`text-xs px-2 py-1 rounded-full border ${mediaTone.chip}`}>{mediaTone.text}</span>
+              </div>
+              <p className="mt-2 text-2xl font-display font-black text-white">{Math.round((mediaDetection.overall_probability || 0) * 100)}%</p>
+              <p className="text-slate-500 text-xs">Analyzed Media: {mediaDetection.analyzed_count || 0}</p>
+              {mediaDetection.note && <p className="text-slate-500 text-xs mt-1">{mediaDetection.note}</p>}
+              {mediaDetection.items?.length > 0 && (
+                <div className="mt-3 space-y-2 max-h-40 overflow-auto pr-1">
+                  {mediaDetection.items.slice(0, 3).map((item, idx) => (
+                    <a
+                      key={idx}
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block p-2 rounded-lg border border-white/10 bg-white/3 hover:bg-white/5 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        {item.type === 'image' ? (
+                          <img
+                            src={item.url}
+                            alt={`Detected media ${idx + 1}`}
+                            className="w-16 h-12 rounded object-cover border border-white/10 shrink-0"
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="w-16 h-12 rounded border border-white/10 shrink-0 flex items-center justify-center text-[10px] uppercase text-slate-400 bg-slate-900/40">
+                            {item.type}
+                          </div>
+                        )}
+
+                        <div className="min-w-0">
+                          <p className="text-xs text-slate-300 truncate">{item.domain}</p>
+                          <p className="text-xs text-slate-500">
+                            {Math.round((item.synthetic_probability || 0) * 100)}% synthetic risk
+                          </p>
+                        </div>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </motion.div>
