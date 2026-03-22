@@ -28,6 +28,32 @@ class Claim(BaseModel):
     conflicting_evidence: bool = False
     search_queries: List[str] = []
 
+
+class AITextDetection(BaseModel):
+    probability: float
+    label: str
+    confidence: float
+    indicators: List[str] = []
+    method: str = "heuristic-v1"
+
+
+class AIMediaItem(BaseModel):
+    type: str
+    url: str
+    domain: str
+    trust_score: float
+    synthetic_probability: float
+    flags: List[str] = []
+
+
+class AIMediaDetection(BaseModel):
+    overall_probability: float
+    label: str
+    analyzed_count: int
+    items: List[AIMediaItem] = []
+    note: str = ""
+    method: str = "heuristic-media-v1"
+
 class VerificationReport(BaseModel):
     id: str
     user_id: str
@@ -43,6 +69,8 @@ class VerificationReport(BaseModel):
     unverifiable_count: int
     conflicting_count: int
     hallucination_count: int
+    ai_text_detection: AITextDetection
+    ai_media_detection: AIMediaDetection
     pipeline_steps: List[dict]
     created_at: str
     processing_time: float

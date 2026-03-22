@@ -18,6 +18,8 @@ Rules:
 - Make queries specific and likely to return authoritative sources
 - Use different angles/perspectives
 - Include key entities, dates, numbers from the claim
+- Prefer official/statistical sources (UN, World Bank, WHO, government, Reuters, AP, BBC)
+- Add terms like "latest data", "official source", or "report" where appropriate
 
 Return ONLY valid JSON (no markdown):
 {{
@@ -28,7 +30,20 @@ Return ONLY valid JSON (no markdown):
     data = extract_json_from_text(response)
     
     if isinstance(data, dict) and "queries" in data:
-        return data["queries"]
+        raw_queries = [q.strip() for q in data["queries"] if isinstance(q, str) and q.strip()]
+        unique_queries = []
+        seen = set()
+        for q in raw_queries:
+            key = q.lower()
+            if key not in seen:
+                seen.add(key)
+                unique_queries.append(q)
+        if len(unique_queries) >= 3:
+            return unique_queries[:3]
     
     # Fallback: create basic query from claim
-    return [claim, f"fact check {claim}", f"is it true that {claim}"]
+    return [
+        f"{claim} latest data official source",
+        f"{claim} site:un.org OR site:worldbank.org OR site:who.int OR site:gov",
+        f"fact check {claim} Reuters AP BBC",
+    ]
