@@ -37,7 +37,8 @@ async def verify_content(
     try:
         result = await run_verification_pipeline(
             input_type=body.input_type,
-            content=body.content.strip()
+            content=body.content.strip(),
+            preferred_model="gemini"
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))

@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from typing import Optional
 import re
 from urllib.parse import urljoin
+from urllib.parse import unquote, urlparse
 
 TRUST_DOMAINS = {
     "reuters.com": 95, "apnews.com": 95, "bbc.com": 92, "bbc.co.uk": 92,
@@ -49,8 +50,65 @@ async def scrape_url(url: str, timeout: int = 10) -> Optional[str]:
                 tag.decompose()
             # Extract main content
             paragraphs = soup.find_all("p")
-            text = " ".join(p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 50)
-            return text[:3000] if text else None
+            boilerplate_tokens = [
+                "this site uses cookies",
+                "cookies will be placed",
+                "privacy policy",
+                "accept cookies",
+                "cookie",
+                "javascript",
+            ]
+
+            candidates = []
+            for p in paragraphs:
+                p_text = p.get_text(strip=True)
+                if len(p_text) <= 50:
+                    continue
+                lowered = p_text.lower()
+                if any(token in lowered for token in boilerplate_tokens):
+                    continue
+                candidates.append(p_text)
+
+            text = " ".join(candidates)
+
+            if text:
+                return text[:3000]
+
+            # Fallback for JS-heavy dashboards/data pages with sparse paragraph text.
+            title = (soup.title.get_text(strip=True) if soup.title else "")
+            meta_desc = ""
+            meta_tag = soup.find("meta", attrs={"name": "description"}) or soup.find("meta", attrs={"property": "og:description"})
+            if meta_tag and meta_tag.get("content"):
+                meta_desc = meta_tag.get("content", "").strip()
+
+            headings = []
+            for h in soup.find_all(["h1", "h2"], limit=5):
+                h_text = h.get_text(" ", strip=True)
+                if h_text and len(h_text) >= 8:
+                    headings.append(h_text)
+
+            parsed = urlparse(str(response.url))
+            path_hint = unquote(parsed.path or "")
+            query_hint = unquote(parsed.query or "")
+
+            url_hint = ""
+            if path_hint or query_hint:
+                compact_path = re.sub(r"[/_-]+", " ", path_hint).strip()
+                compact_query = re.sub(r"[=&_-]+", " ", query_hint).strip()
+                # Only include URL hint if it has meaningful info (not just indicator=...); skip redundant query params
+                if len(compact_query.split()) <= 3:  # "NY GDP MKTP CD" is ok, "Selected Countries Economies" is boilerplate
+                    url_hint = f"URL: {compact_path} {compact_query}".strip() if compact_path else ""
+
+            # Clean fallback parts: remove empty, deduplicate, respect order
+            fallback_parts = []
+            for part in [title, meta_desc, " ".join(headings[:2])]:
+                if part and part not in fallback_parts:
+                    fallback_parts.append(part)
+            if url_hint:
+                fallback_parts.append(url_hint)
+            
+            fallback_text = " ".join(fallback_parts).strip()
+            return fallback_text[:2000] if fallback_text else None
     except Exception:
         return None
 
