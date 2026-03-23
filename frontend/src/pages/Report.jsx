@@ -57,10 +57,81 @@ const PDF_PRESETS = {
   },
 }
 
+function getTrustTier(trustScore = 0) {
+  if (trustScore >= 0.85) {
+    return { label: 'High trust', cls: 'bg-emerald-500/20 text-emerald-400' }
+  }
+  if (trustScore >= 0.65) {
+    return { label: 'Medium trust', cls: 'bg-amber-500/20 text-amber-400' }
+  }
+  return { label: 'Low trust', cls: 'bg-red-500/20 text-red-400' }
+}
+
+function claimHighlightClass(status) {
+  if (status === 'TRUE') return 'highlight-true'
+  if (status === 'FALSE') return 'highlight-false'
+  if (status === 'PARTIALLY_TRUE') return 'highlight-partial'
+  if (status === 'CONFLICTING') return 'highlight-conflicting'
+  return 'highlight-unverifiable'
+}
+
+function escapeRegExp(text = '') {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function renderHighlightedText(inputText = '', claims = []) {
+  const safeText = String(inputText || '')
+  if (!safeText) return null
+
+  const validClaims = (claims || [])
+    .map((c) => ({ ...c, text: String(c?.text || '').trim() }))
+    .filter((c) => c.text.length >= 8)
+    .sort((a, b) => b.text.length - a.text.length)
+
+  const ranges = []
+  for (const claim of validClaims) {
+    const pattern = new RegExp(escapeRegExp(claim.text), 'i')
+    const match = pattern.exec(safeText)
+    if (!match) continue
+
+    const start = match.index
+    const end = start + match[0].length
+    const overlaps = ranges.some((r) => !(end <= r.start || start >= r.end))
+    if (!overlaps) {
+      ranges.push({ start, end, status: claim.status, claimId: claim.id })
+    }
+  }
+
+  ranges.sort((a, b) => a.start - b.start)
+  if (ranges.length === 0) return safeText
+
+  const parts = []
+  let cursor = 0
+  ranges.forEach((r, i) => {
+    if (cursor < r.start) {
+      parts.push(<span key={`t-${i}-${cursor}`}>{safeText.slice(cursor, r.start)}</span>)
+    }
+    parts.push(
+      <span key={`h-${i}-${r.start}`} className={claimHighlightClass(r.status)} title={`Claim status: ${r.status}`}>
+        {safeText.slice(r.start, r.end)}
+      </span>
+    )
+    cursor = r.end
+  })
+  if (cursor < safeText.length) {
+    parts.push(<span key={`t-end-${cursor}`}>{safeText.slice(cursor)}</span>)
+  }
+  return parts
+}
+
 function ClaimCard({ claim, index }) {
   const [expanded, setExpanded] = useState(false)
   const cfg = STATUS_CONFIG[claim.status] || STATUS_CONFIG.UNVERIFIABLE
   const Icon = cfg.icon
+  const supportingCount = (claim.supporting_sources || []).length
+  const contradictingCount = (claim.contradicting_sources || []).length
+  const mappedSupporting = claim.evidence_mapping?.supporting || []
+  const mappedContradicting = claim.evidence_mapping?.contradicting || []
 
   return (
     <motion.div
@@ -159,6 +230,41 @@ function ClaimCard({ claim, index }) {
                 </div>
               )}
 
+              {(supportingCount > 0 || contradictingCount > 0) && (
+                <div className="p-3 bg-orange-500/10 border border-orange-500/20 rounded-xl">
+                  <h4 className="text-xs font-bold text-orange-300 uppercase tracking-wider mb-2 flex items-center gap-1">
+                    <AlertTriangle size={12} /> Evidence Balance
+                  </h4>
+                  <p className="text-orange-200/90 text-xs">
+                    {supportingCount} source(s) support this claim • {contradictingCount} source(s) contradict this claim
+                  </p>
+                </div>
+              )}
+
+              {(mappedSupporting.length > 0 || mappedContradicting.length > 0) && (
+                <div>
+                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1">
+                    <Shield size={12} /> Claim to Evidence Mapping
+                  </h4>
+                  <div className="space-y-2">
+                    {mappedSupporting.map((m, i) => (
+                      <div key={`s-${i}`} className="p-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10">
+                        <p className="text-[11px] uppercase tracking-wider text-emerald-300 mb-1">Supporting evidence</p>
+                        <p className="text-slate-200 text-xs leading-relaxed">"{m.matched_sentence || 'No matching sentence extracted.'}"</p>
+                        <p className="text-slate-500 text-[11px] mt-1">Source {m.source_index}: {m.domain}</p>
+                      </div>
+                    ))}
+                    {mappedContradicting.map((m, i) => (
+                      <div key={`c-${i}`} className="p-3 rounded-xl border border-red-500/25 bg-red-500/10">
+                        <p className="text-[11px] uppercase tracking-wider text-red-300 mb-1">Contradicting evidence</p>
+                        <p className="text-slate-200 text-xs leading-relaxed">"{m.matched_sentence || 'No matching sentence extracted.'}"</p>
+                        <p className="text-slate-500 text-[11px] mt-1">Source {m.source_index}: {m.domain}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Temporal Note */}
               {claim.temporal_note && (
                 <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl flex items-start gap-2">
@@ -211,6 +317,12 @@ function ClaimCard({ claim, index }) {
                           )}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
+                              {(() => {
+                                const tier = getTrustTier(src.trust_score)
+                                return (
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${tier.cls}`}>{tier.label}</span>
+                                )
+                              })()}
                               <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
                                 src.trust_score >= 0.85 ? 'bg-emerald-500/20 text-emerald-400' :
                                 src.trust_score >= 0.65 ? 'bg-amber-500/20 text-amber-400' :
@@ -485,6 +597,7 @@ export default function Report() {
   ].filter(d => d.value > 0)
 
   const accuracyPct = Math.round(report.overall_accuracy * 100)
+  const trustScorePct = Math.round((report.trust_score || 0) * 100)
   const textDetection = report.ai_text_detection || { probability: 0, label: 'unknown', confidence: 0, indicators: [] }
   const mediaDetection = report.ai_media_detection || { overall_probability: 0, label: 'not_applicable', analyzed_count: 0, items: [] }
   const textAnalyzerPreviewImage = (mediaDetection.items || []).find((item) => item.type === 'image')?.url || null
@@ -566,12 +679,13 @@ export default function Report() {
             </div>
 
             {/* Stats */}
-            <div className="md:col-span-2 grid grid-cols-3 gap-4">
+            <div className="md:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
                 { label: 'Total Claims', value: report.total_claims, icon: Shield, color: 'text-primary-400' },
                 { label: 'True', value: report.true_count, icon: CheckCircle, color: 'text-emerald-400' },
                 { label: 'False', value: report.false_count, icon: XCircle, color: 'text-red-400' },
                 { label: 'Partial', value: report.partial_count, icon: AlertTriangle, color: 'text-amber-400' },
+                { label: 'Trust Score', value: `${trustScorePct}%`, icon: Star, color: trustScorePct >= 40 ? 'text-emerald-400' : trustScorePct >= 0 ? 'text-amber-400' : 'text-red-400' },
                 { label: 'Hallucinations', value: report.hallucination_count, icon: Brain, color: 'text-purple-400' },
                 { label: 'Proc. Time', value: `${report.processing_time}s`, icon: Clock, color: 'text-blue-400' },
               ].map((s, i) => (
@@ -752,6 +866,15 @@ export default function Report() {
             <a href={report.source_url} target="_blank" rel="noopener noreferrer" className="text-primary-400 hover:underline text-sm truncate flex items-center gap-1">
               {report.source_url} <ExternalLink size={12} />
             </a>
+          </div>
+        )}
+
+        {report.input_text && (
+          <div className="glass-card p-5 mb-6">
+            <h3 className="font-display font-bold text-white mb-3 text-sm uppercase tracking-wide">Input Text with Claim Highlights</h3>
+            <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">
+              {renderHighlightedText(report.input_text, report.claims || [])}
+            </p>
           </div>
         )}
 

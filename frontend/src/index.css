@@ -52,6 +52,20 @@
            transition-all duration-200;
   }
 
+  /* Ensure native select dropdown options remain readable on Windows/browser default menus. */
+  .model-select {
+    color-scheme: dark;
+  }
+  .model-select option {
+    color: #e2e8f0;
+    background-color: #0f172a;
+  }
+  .model-select option:checked,
+  .model-select option:hover {
+    color: #ffffff;
+    background-color: #2563eb;
+  }
+
   /* Button Styles */
   .btn-primary {
     @apply px-6 py-3 bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-400

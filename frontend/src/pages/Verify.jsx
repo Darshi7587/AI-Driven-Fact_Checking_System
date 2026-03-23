@@ -106,7 +106,10 @@ export default function Verify() {
     simulatePipeline() // Visual progress (real processing happens in backend)
     
     try {
-      const res = await verifyAPI.verify({ input_type: inputType, content: content.trim() })
+      const res = await verifyAPI.verify({
+        input_type: inputType,
+        content: content.trim(),
+      })
       toast.success('Verification complete!')
       navigate(`/report/${res.data.id}`)
     } catch (err) {
@@ -200,7 +203,7 @@ export default function Verify() {
               <div className="flex items-center justify-between mt-4">
                 <div className="flex items-center gap-2 text-slate-500 text-xs">
                   <Shield size={12} className="text-primary-400" />
-                  Multi-agent verification pipeline • Tavily + DuckDuckGo evidence retrieval • Gemini with local fallback
+                    Multi-agent verification pipeline • Tavily + DuckDuckGo evidence retrieval • Model: GEMINI only
                 </div>
                 <motion.button
                   type="submit"
