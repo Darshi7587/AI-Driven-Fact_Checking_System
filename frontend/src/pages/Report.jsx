@@ -132,6 +132,7 @@ function ClaimCard({ claim, index }) {
   const contradictingCount = (claim.contradicting_sources || []).length
   const mappedSupporting = claim.evidence_mapping?.supporting || []
   const mappedContradicting = claim.evidence_mapping?.contradicting || []
+  const decisionFlags = claim.decision_flags || []
 
   return (
     <motion.div
@@ -176,6 +177,20 @@ function ClaimCard({ claim, index }) {
                     <AlertTriangle size={10} /> Conflicting
                   </span>
                 )}
+
+                {decisionFlags.map((flag, i) => (
+                  <span
+                    key={`${flag}-${i}`}
+                    className={`px-2 py-0.5 rounded-full text-xs border ${
+                      flag === 'Time-sensitive' ? 'bg-blue-500/15 text-blue-300 border-blue-500/30' :
+                      flag === 'Conflicting Evidence' ? 'bg-orange-500/15 text-orange-300 border-orange-500/30' :
+                      flag === 'Weak Evidence' ? 'bg-amber-500/15 text-amber-300 border-amber-500/30' :
+                      'bg-slate-500/15 text-slate-300 border-slate-500/30'
+                    }`}
+                  >
+                    {flag}
+                  </span>
+                ))}
               </div>
             </div>
           </div>
@@ -210,10 +225,10 @@ function ClaimCard({ claim, index }) {
             className="overflow-hidden"
           >
             <div className="px-5 pb-5 space-y-4 border-t border-white/5">
-              {/* AI Reasoning */}
+              {/* Explanation */}
               <div>
                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 mt-4 flex items-center gap-1">
-                  <Brain size={12} className="text-primary-400" /> AI Reasoning (Chain of Thought)
+                  <Brain size={12} className="text-primary-400" /> Explanation
                 </h4>
                 <div className={`p-4 ${cfg.bg} border ${cfg.border} rounded-xl`}>
                   <p className="text-slate-300 text-sm leading-relaxed">{claim.reasoning}</p>
@@ -368,6 +383,20 @@ function detectionTone(probability = 0) {
   return { chip: 'bg-amber-500/20 text-amber-300 border-amber-500/30', text: 'Uncertain' }
 }
 
+function getHallucinationRisk(hallucinationCount = 0, totalClaims = 0) {
+  if (totalClaims <= 0) {
+    return { label: 'Low', cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' }
+  }
+  const ratio = hallucinationCount / totalClaims
+  if (ratio >= 0.35) {
+    return { label: 'High', cls: 'bg-red-500/20 text-red-300 border-red-500/30' }
+  }
+  if (ratio >= 0.15) {
+    return { label: 'Medium', cls: 'bg-amber-500/20 text-amber-300 border-amber-500/30' }
+  }
+  return { label: 'Low', cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' }
+}
+
 export default function Report() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -473,9 +502,12 @@ export default function Report() {
 
       addWrappedText('Summary', { fontSize: 13, fontStyle: 'bold', color: [15, 23, 42], spacingAfter: 2 })
       addWrappedText(`Overall Accuracy: ${Math.round((report.overall_accuracy || 0) * 100)}%`, { fontSize: 10 })
+      addWrappedText(`Trust Score: ${Math.round((report.trust_score || 0) * 100)}%`, { fontSize: 10 })
+      addWrappedText(`Average Claim Confidence: ${Math.round(((report.avg_confidence ?? (report.claims || []).reduce((sum, c) => sum + (c.confidence || 0), 0) / Math.max((report.claims || []).length, 1)) || 0) * 100)}%`, { fontSize: 10 })
       addWrappedText(`Total Claims: ${report.total_claims || 0}`, { fontSize: 10 })
       addWrappedText(`True: ${report.true_count || 0} | False: ${report.false_count || 0} | Partial: ${report.partial_count || 0} | Unverifiable: ${report.unverifiable_count || 0} | Conflicting: ${report.conflicting_count || 0}`, { fontSize: 10 })
-      addWrappedText(`Hallucinations: ${report.hallucination_count || 0} | Processing Time: ${report.processing_time || 0}s`, { fontSize: 10 })
+      const pdfHallucinationRisk = getHallucinationRisk(report.hallucination_count || 0, report.total_claims || 0)
+      addWrappedText(`Hallucination Risk: ${pdfHallucinationRisk.label} (${report.hallucination_count || 0}/${report.total_claims || 0}) | Processing Time: ${report.processing_time || 0}s`, { fontSize: 10 })
       if (report.ai_text_detection) {
         addWrappedText(`AI-Generated Text Probability: ${Math.round((report.ai_text_detection.probability || 0) * 100)}% (${report.ai_text_detection.label || 'unknown'})`, { fontSize: 10 })
       }
@@ -523,7 +555,7 @@ export default function Report() {
         )
 
         if (preset.includeReasoning && claim.reasoning) {
-          addWrappedText('AI Reasoning', { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
+          addWrappedText('Explanation', { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
           addWrappedText(clipText(claim.reasoning, presetKey === 'standard' ? 900 : 0), { fontSize: 9, color: [30, 41, 59], spacingAfter: 2 })
         }
 
@@ -598,6 +630,10 @@ export default function Report() {
 
   const accuracyPct = Math.round(report.overall_accuracy * 100)
   const trustScorePct = Math.round((report.trust_score || 0) * 100)
+  const avgConfidencePct = Math.round(((report.avg_confidence ?? (report.claims || []).reduce((sum, c) => sum + (c.confidence || 0), 0) / Math.max((report.claims || []).length, 1)) || 0) * 100)
+  const temporalCount = (report.claims || []).filter((c) => c.is_temporal).length
+  const conflictSignalCount = (report.claims || []).filter((c) => c.conflicting_evidence || c.status === 'CONFLICTING').length
+  const hallucinationRisk = getHallucinationRisk(report.hallucination_count || 0, report.total_claims || 0)
   const textDetection = report.ai_text_detection || { probability: 0, label: 'unknown', confidence: 0, indicators: [] }
   const mediaDetection = report.ai_media_detection || { overall_probability: 0, label: 'not_applicable', analyzed_count: 0, items: [] }
   const textAnalyzerPreviewImage = (mediaDetection.items || []).find((item) => item.type === 'image')?.url || null
@@ -685,8 +721,9 @@ export default function Report() {
                 { label: 'True', value: report.true_count, icon: CheckCircle, color: 'text-emerald-400' },
                 { label: 'False', value: report.false_count, icon: XCircle, color: 'text-red-400' },
                 { label: 'Partial', value: report.partial_count, icon: AlertTriangle, color: 'text-amber-400' },
-                { label: 'Trust Score', value: `${trustScorePct}%`, icon: Star, color: trustScorePct >= 40 ? 'text-emerald-400' : trustScorePct >= 0 ? 'text-amber-400' : 'text-red-400' },
-                { label: 'Hallucinations', value: report.hallucination_count, icon: Brain, color: 'text-purple-400' },
+                { label: 'Trust Score', value: `${trustScorePct}%`, icon: Star, color: trustScorePct >= 70 ? 'text-emerald-400' : trustScorePct >= 45 ? 'text-amber-400' : 'text-red-400' },
+                { label: 'Avg Confidence', value: `${avgConfidencePct}%`, icon: TrendingUp, color: avgConfidencePct >= 70 ? 'text-emerald-400' : avgConfidencePct >= 45 ? 'text-amber-400' : 'text-red-400' },
+                { label: 'Hallucination Risk', value: hallucinationRisk.label, icon: Brain, color: hallucinationRisk.label === 'Low' ? 'text-emerald-400' : hallucinationRisk.label === 'Medium' ? 'text-amber-400' : 'text-red-400' },
                 { label: 'Proc. Time', value: `${report.processing_time}s`, icon: Clock, color: 'text-blue-400' },
               ].map((s, i) => (
                 <div key={i} className="text-center p-3 bg-white/3 rounded-xl">
@@ -696,6 +733,18 @@ export default function Report() {
                 </div>
               ))}
             </div>
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-2">
+            <span className="px-2.5 py-1 rounded-full text-xs border bg-orange-500/15 text-orange-300 border-orange-500/30">
+              Conflict Signals: {conflictSignalCount}
+            </span>
+            <span className="px-2.5 py-1 rounded-full text-xs border bg-blue-500/15 text-blue-300 border-blue-500/30">
+              Time-Sensitive Claims: {temporalCount}
+            </span>
+            <span className={`px-2.5 py-1 rounded-full text-xs border ${hallucinationRisk.cls}`}>
+              Hallucination Risk: {hallucinationRisk.label}
+            </span>
           </div>
         </motion.div>
 
