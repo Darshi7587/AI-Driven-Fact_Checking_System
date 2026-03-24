@@ -183,6 +183,7 @@ def _looks_verifiable(claim_text: str) -> bool:
     factual_verbs = [
         "is", "was", "were", "became", "reported", "reports", "announced", "overtook",
         "ranked", "reached", "has", "have", "had", "shows", "show", "indicates", "indicate", "faces", "face", "faced",
+        "use", "uses", "used",
     ]
     has_factual_verb = any(f" {v} " in f" {lowered} " for v in factual_verbs)
     return (has_number or has_date or has_entity or has_concrete_noun) and has_factual_verb

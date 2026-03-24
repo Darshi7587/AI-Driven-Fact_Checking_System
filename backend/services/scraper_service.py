@@ -6,32 +6,119 @@ import re
 from urllib.parse import urljoin
 from urllib.parse import unquote, urlparse
 
-TRUST_DOMAINS = {
-    "reuters.com": 95, "apnews.com": 95, "bbc.com": 92, "bbc.co.uk": 92,
-    "nytimes.com": 90, "washingtonpost.com": 88, "theguardian.com": 88,
-    "npr.org": 90, "pbs.org": 88, "economist.com": 90, "nature.com": 95,
-    "science.org": 95, "pubmed.ncbi.nlm.nih.gov": 97, "who.int": 95,
-    "cdc.gov": 95, "nih.gov": 95, "gov": 85, "edu": 85,
-    "wikipedia.org": 70, "snopes.com": 80, "factcheck.org": 85,
-    "politifact.com": 82, "fullfact.org": 83, "bloomberg.com": 87,
-    "forbes.com": 78, "techcrunch.com": 75, "wired.com": 78,
-    "medium.com": 45, "substack.com": 40, "reddit.com": 30,
-    "twitter.com": 25, "x.com": 25, "facebook.com": 20
+HIGH_TRUST_DOMAINS = {
+    # Global news
+    "reuters.com": 0.95,
+    "apnews.com": 0.95,
+    "bbc.com": 0.92,
+    "bbc.co.uk": 0.92,
+    "nytimes.com": 0.90,
+    "theguardian.com": 0.88,
+    # India trusted
+    "thehindu.com": 0.88,
+    "indianexpress.com": 0.86,
+    "pib.gov.in": 0.96,
+    # Government and institutions
+    "nasa.gov": 0.96,
+    "who.int": 0.95,
+    "un.org": 0.95,
+    "worldbank.org": 0.92,
+    "imf.org": 0.92,
+    # Scientific and academic
+    "nature.com": 0.95,
+    "sciencedirect.com": 0.93,
+    "ncbi.nlm.nih.gov": 0.97,
+    "pubmed.ncbi.nlm.nih.gov": 0.97,
+    "science.org": 0.95,
+    "cdc.gov": 0.95,
+    "nih.gov": 0.95,
 }
 
+MEDIUM_TRUST_DOMAINS = {
+    "congress.gov": 0.78,
+    "wikipedia.org": 0.70,
+    "snopes.com": 0.80,
+    "factcheck.org": 0.85,
+    "politifact.com": 0.82,
+    "fullfact.org": 0.83,
+    "forbes.com": 0.78,
+    "businessinsider.com": 0.74,
+    "techcrunch.com": 0.75,
+    "wired.com": 0.78,
+    "timesofindia.indiatimes.com": 0.72,
+    "ndtv.com": 0.74,
+    "hindustantimes.com": 0.73,
+    "medium.com": 0.45,
+    "towardsdatascience.com": 0.52,
+    "dev.to": 0.48,
+}
+
+LOW_TRUST_DOMAINS = {
+    "substack.com": 0.40,
+    "reddit.com": 0.30,
+    "twitter.com": 0.25,
+    "x.com": 0.25,
+    "facebook.com": 0.20,
+    "blogspot.com": 0.30,
+}
+
+LOW_TRUST_TLDS = {".xyz", ".buzz", ".click", ".top", ".gq", ".work"}
+LOW_TRUST_TOKENS = {
+    "viral", "truthnews", "breaking-news", "worldtruth", "dailynews247", "exposed", "uncensored"
+}
+
+
+def _domain_from_url(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        host = parsed.netloc or parsed.path
+    except Exception:
+        host = url
+    host = host.lower().strip()
+    host = re.sub(r"^https?://", "", host)
+    host = re.sub(r"^www\.", "", host)
+    host = host.split("/")[0]
+    return host
+
+
+def _lookup_domain_score(domain: str, domain_map: dict[str, float]) -> float | None:
+    for trusted_domain, score in domain_map.items():
+        if domain == trusted_domain or domain.endswith(f".{trusted_domain}"):
+            return score
+    return None
+
 def get_trust_score(url: str) -> float:
-    """Score domain trustworthiness 0-100."""
-    domain = re.sub(r'^https?://(www\.)?', '', url).split('/')[0]
-    for trusted_domain, score in TRUST_DOMAINS.items():
-        if trusted_domain in domain:
-            return score / 100.0
-    # Default for unknown domains
-    if ".gov" in domain:
-        return 0.85
-    if ".edu" in domain:
-        return 0.82
-    if ".org" in domain:
-        return 0.60
+    """Score domain trustworthiness from 0.0 to 1.0 using curated + dynamic rules."""
+    domain = _domain_from_url(url)
+
+    score = _lookup_domain_score(domain, HIGH_TRUST_DOMAINS)
+    if score is not None:
+        return score
+
+    score = _lookup_domain_score(domain, MEDIUM_TRUST_DOMAINS)
+    if score is not None:
+        return score
+
+    score = _lookup_domain_score(domain, LOW_TRUST_DOMAINS)
+    if score is not None:
+        return score
+
+    # Dynamic signals for unknown domains.
+    lowered = domain.lower()
+    if any(lowered.endswith(tld) for tld in LOW_TRUST_TLDS):
+        return 0.25
+    if any(token in lowered for token in LOW_TRUST_TOKENS):
+        return 0.30
+
+    # Institutional defaults.
+    if lowered.endswith(".gov") or lowered.endswith(".gov.in"):
+        return 0.88
+    if lowered.endswith(".edu") or lowered.endswith(".ac.in"):
+        return 0.84
+    if lowered.endswith(".org"):
+        return 0.62
+
+    # Generic default for unknown commercial/news domains.
     return 0.50
 
 async def scrape_url(url: str, timeout: int = 10) -> Optional[str]:

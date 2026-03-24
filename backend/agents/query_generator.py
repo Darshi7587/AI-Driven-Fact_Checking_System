@@ -5,6 +5,8 @@ import re
 
 def _detect_claim_type(claim: str) -> str:
     lowered = claim.lower()
+    if "brain" in lowered and ("10%" in lowered or "10 percent" in lowered or "ten percent" in lowered):
+        return "brain_usage_myth"
     if any(k in lowered for k in ["coffee", "caffeine"]) and any(k in lowered for k in ["benefit", "anxiety", "sleep", "insomnia", "excessive intake", "health issue"]):
         return "caffeine_effects"
     if any(k in lowered for k in ["located in", "consists of", "comprises", "states", "continents"]):
@@ -155,6 +157,12 @@ def _fallback_queries_for_claim(claim: str) -> List[str]:
             "coffee health benefits moderate intake evidence-based review",
             "excessive caffeine intake anxiety sleep disorders systematic review",
             "WHO NIH guidance caffeine daily intake and side effects",
+        ])
+    if claim_type == "brain_usage_myth":
+        return _with_seed_query(claim, [
+            "humans use only 10 percent of their brain myth debunked",
+            "neuroscience evidence all parts of brain are used",
+            "Harvard medical school 10 percent brain myth",
         ])
     if claim_type == "gdp":
         return _with_seed_query(claim, [

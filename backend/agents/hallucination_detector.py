@@ -1,5 +1,21 @@
 from services.gemini_service import call_gemini, extract_json_from_text
 from typing import Dict
+import re
+
+
+def _historically_fixed_note(claim: str) -> str:
+    text = (claim or "").lower()
+    year_match = re.search(r"\b((?:19|20)\d{2})\b", text)
+    year = year_match.group(1) if year_match else ""
+    has_year = bool(year)
+    event_tokens = [
+        "landed", "landing", "launched", "elected", "won", "signed", "announced", "occurred",
+        "happened", "was founded", "was established", "died", "born",
+    ]
+    has_event = any(token in text for token in event_tokens)
+    if has_year and has_event:
+        return f"This claim refers to a specific event in {year} and is time-bound but historically fixed."
+    return ""
 
 async def detect_hallucination(claim: str, verification_result: Dict, evidence_sources: list) -> Dict:
     """
@@ -40,6 +56,10 @@ async def check_temporal_validity(claim: str, is_temporal: bool) -> Dict:
     """Check if a claim is temporally outdated."""
     if not is_temporal:
         return {"is_temporal_issue": False, "note": ""}
+
+    fixed_note = _historically_fixed_note(claim)
+    if fixed_note:
+        return {"is_temporal_issue": True, "temporal_note": fixed_note}
     
     prompt = f"""Is this claim TEMPORALLY SENSITIVE? Does it reference current state, recent events, or time-relative information?
 
@@ -51,8 +71,17 @@ If temporally sensitive, flag it. Return JSON only:
   "temporal_note": "Brief note about the temporal sensitivity (e.g., 'Claim references current CEO, may be outdated')"
 }}"""
     
-    response = await call_gemini(prompt)
-    result = extract_json_from_text(response)
-    if isinstance(result, dict):
-        return result
-    return {"is_temporal_issue": True, "temporal_note": "Claim contains time-sensitive information"}
+    try:
+        response = await call_gemini(prompt)
+        result = extract_json_from_text(response)
+        if isinstance(result, dict):
+            note = result.get("temporal_note", "")
+            if note and len(note.strip()) >= 12:
+                return result
+    except Exception:
+        pass
+
+    return {
+        "is_temporal_issue": True,
+        "temporal_note": "This claim includes time-sensitive context and may require date-specific verification.",
+    }

@@ -29,6 +29,7 @@ class Claim(BaseModel):
     search_queries: List[str] = []
     supporting_sources: List[int] = []
     contradicting_sources: List[int] = []
+    decision_flags: List[str] = []
     evidence_mapping: Dict[str, Any] = {}
 
 
@@ -66,6 +67,7 @@ class VerificationReport(BaseModel):
     claims: List[Claim]
     overall_accuracy: float
     trust_score: float = 0.0
+    avg_confidence: float = 0.0
     total_claims: int
     true_count: int
     false_count: int

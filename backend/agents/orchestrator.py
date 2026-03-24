@@ -171,6 +171,7 @@ async def run_verification_pipeline(
                     "sources": evidence,
                     "supporting_sources": verification.get("supporting_sources", []),
                     "contradicting_sources": verification.get("contradicting_sources", []),
+                    "decision_flags": verification.get("decision_flags", []),
                     "evidence_mapping": verification.get("evidence_mapping", {"supporting": [], "contradicting": []}),
                     "is_temporal": is_temporal,
                     "temporal_note": temporal_info.get("temporal_note", ""),
@@ -210,6 +211,7 @@ async def run_verification_pipeline(
                     "sources": [],
                     "supporting_sources": [],
                     "contradicting_sources": [],
+                    "decision_flags": ["Weak Evidence", "Emerging Claim"],
                     "evidence_mapping": {"supporting": [], "contradicting": []},
                     "is_temporal": bool(raw_claims[i].get("is_temporal", False)),
                     "temporal_note": "",
@@ -237,7 +239,28 @@ async def run_verification_pipeline(
         unverifiable = counts.get("UNVERIFIABLE", 0)
         verifiable_total = total - unverifiable
         overall_accuracy = (true_weight + partial_weight) / verifiable_total if verifiable_total > 0 else 0.0
-        trust_score = ((counts.get("TRUE", 0) - counts.get("FALSE", 0)) / total) if total > 0 else 0.0
+
+        # Confidence-weighted trust score in [0, 1].
+        # TRUE adds confidence, FALSE subtracts confidence, PARTIALLY_TRUE contributes half.
+        weighted_balance = 0.0
+        confidence_sum = 0.0
+        for claim in processed_claims:
+            conf = float(claim.get("confidence", 0.0) or 0.0)
+            conf = max(0.0, min(conf, 1.0))
+            confidence_sum += conf
+            status = claim.get("status", "UNVERIFIABLE")
+            if status == "TRUE":
+                weighted_balance += conf
+            elif status == "PARTIALLY_TRUE":
+                weighted_balance += 0.5 * conf
+            elif status == "FALSE":
+                weighted_balance -= conf
+            elif status == "CONFLICTING":
+                weighted_balance += 0.1 * conf
+
+        trust_score = 0.5 + (weighted_balance / (2 * max(total, 1)))
+        trust_score = max(0.0, min(trust_score, 1.0))
+        avg_confidence = (confidence_sum / total) if total > 0 else 0.0
 
         processing_time = time.time() - start_time
         add_step("Report Generation", "completed", f"Total time: {processing_time:.1f}s")
@@ -285,6 +308,7 @@ async def run_verification_pipeline(
             "claims": processed_claims,
             "overall_accuracy": round(overall_accuracy, 3),
             "trust_score": round(trust_score, 3),
+            "avg_confidence": round(avg_confidence, 3),
             "total_claims": total,
             "true_count": counts.get("TRUE", 0),
             "false_count": counts.get("FALSE", 0),
