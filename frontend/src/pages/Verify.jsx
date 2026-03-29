@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   FileText, Link, Zap, ArrowRight, AlertCircle, 
   CheckCircle2, Loader2, Search, Brain, Shield,
-  ChevronDown, ChevronUp
+  ChevronDown, ChevronUp, Upload
 } from 'lucide-react'
 import { verifyAPI } from '../services/api'
 import toast from 'react-hot-toast'
@@ -85,7 +85,20 @@ export default function Verify() {
   const [loading, setLoading] = useState(false)
   const [pipelineStage, setPipelineStage] = useState(null)
   const [showExamples, setShowExamples] = useState(false)
+  const [aiText, setAiText] = useState('')
+  const [aiFile, setAiFile] = useState(null)
+  const [aiPreviewUrl, setAiPreviewUrl] = useState(null)
+  const [aiDetectLoading, setAiDetectLoading] = useState(false)
+  const [aiDetectResult, setAiDetectResult] = useState(null)
   const navigate = useNavigate()
+
+  useEffect(() => {
+    return () => {
+      if (aiPreviewUrl) {
+        URL.revokeObjectURL(aiPreviewUrl)
+      }
+    }
+  }, [aiPreviewUrl])
 
   const simulatePipeline = async () => {
     const stages = ['preprocess', 'extract', 'search', 'verify', 'report']
@@ -131,6 +144,76 @@ export default function Verify() {
     }
   }
 
+  const handleAiDetect = async () => {
+    if (!aiText.trim() && !aiFile) {
+      toast.error('Provide text or upload an image/media file')
+      return
+    }
+
+    try {
+      setAiDetectLoading(true)
+      const formData = new FormData()
+      if (aiText.trim()) formData.append('text', aiText.trim())
+      if (aiFile) formData.append('media_file', aiFile)
+
+      const res = await verifyAPI.aiDetect(formData)
+      setAiDetectResult(res.data)
+      toast.success('AI detection completed')
+    } catch (err) {
+      const detail = err.response?.data?.detail
+      toast.error(typeof detail === 'string' ? detail : 'AI detection failed')
+    } finally {
+      setAiDetectLoading(false)
+    }
+  }
+
+  const handleAiFileChange = (e) => {
+    const file = e.target.files?.[0] || null
+    setAiFile(file)
+    setAiDetectResult(null)
+
+    if (aiPreviewUrl) {
+      URL.revokeObjectURL(aiPreviewUrl)
+      setAiPreviewUrl(null)
+    }
+
+    if (file && file.type?.startsWith('image/')) {
+      setAiPreviewUrl(URL.createObjectURL(file))
+    }
+  }
+
+  const getMediaVerdict = (mediaDetection) => {
+    const prediction = mediaDetection?.prediction
+    if (prediction === 'AI-generated') return 'Deepfake'
+    if (prediction === 'Real') return 'Real'
+    if (prediction === 'Possibly AI') return 'Possibly AI'
+    if (prediction === 'Manipulated') return 'Manipulated'
+
+    const verdict = (mediaDetection?.verdict || '').toLowerCase()
+    if (verdict === 'deepfake') return 'Deepfake'
+    if (verdict === 'real') return 'Real'
+
+    const p = Number(mediaDetection?.overall_probability || 0)
+    if (p >= 0.6) return 'Deepfake'
+    if (p <= 0.4) return 'Real'
+    return 'Possibly AI'
+  }
+
+  const toPercent = (value, fallback = 0) => {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return fallback
+    return n <= 1 ? Math.round(n * 100) : Math.round(n)
+  }
+
+  const hasTextDetection = Boolean(aiDetectResult?.text_detection)
+  const hasMediaDetection = Boolean(aiDetectResult?.media_detection)
+
+  const toneClass = (percent) => {
+    if (percent >= 70) return 'text-rose-300'
+    if (percent <= 30) return 'text-emerald-300'
+    return 'text-amber-300'
+  }
+
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-8">
@@ -162,11 +245,163 @@ export default function Verify() {
         >
           <Link size={15} /> URL / Article
         </button>
+        <button
+          onClick={() => setInputType('ai')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-medium text-sm transition-all ${
+            inputType === 'ai'
+              ? 'bg-primary-500/20 text-primary-300 border border-primary-500/30'
+              : 'text-slate-400 hover:text-slate-200 border border-white/5 hover:border-white/10'
+          }`}
+        >
+          <Upload size={15} /> AI Detector
+        </button>
       </div>
 
       {/* Main Input Form */}
       <AnimatePresence mode="wait">
-        {!loading ? (
+        {inputType === 'ai' ? (
+          <motion.div
+            key="ai-detector"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="glass-card p-6"
+          >
+            <h3 className="font-display font-bold text-white mb-1 flex items-center gap-2">
+              <Upload size={16} className="text-primary-400" /> AI Detector (Text / Image)
+            </h3>
+            <p className="text-slate-400 text-xs mb-4">Gemini analysis for text and uploaded media.</p>
+
+            <div className="space-y-3">
+              <textarea
+                value={aiText}
+                onChange={(e) => setAiText(e.target.value)}
+                className="input-primary resize-none h-28 text-sm"
+                placeholder="Paste text for AI-generated detection (optional if uploading file)..."
+              />
+              <div className="flex items-center gap-3">
+                <input
+                  type="file"
+                  accept="image/*,audio/*,video/*"
+                  onChange={handleAiFileChange}
+                  className="text-xs text-slate-300"
+                />
+                {aiFile && <span className="text-xs text-slate-400 truncate">{aiFile.name}</span>}
+              </div>
+
+              {aiPreviewUrl && (
+                <div className="rounded-xl overflow-hidden border border-white/10 bg-black/20">
+                  <img
+                    src={aiPreviewUrl}
+                    alt="Uploaded preview"
+                    className="w-full max-h-72 object-contain"
+                  />
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleAiDetect}
+                disabled={aiDetectLoading}
+                className="btn-secondary px-4 py-2 text-sm"
+              >
+                {aiDetectLoading ? 'Checking...' : 'Analyze'}
+              </button>
+            </div>
+
+            {aiDetectResult && (
+              <div className={`mt-4 grid grid-cols-1 ${hasTextDetection && hasMediaDetection ? 'md:grid-cols-2' : 'md:grid-cols-1'} gap-3`}>
+                {aiDetectResult.text_detection && (
+                  <div className="w-full min-w-0 overflow-hidden p-4 rounded-xl bg-white/5 border border-white/10">
+                    <p className="text-xs uppercase tracking-wide text-slate-400 mb-2">Text Detection Report</p>
+                    <p className="text-base text-white font-semibold mb-3">{aiDetectResult.text_detection.label}</p>
+
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-2">
+                        <p className="text-[11px] text-slate-400">AI Probability</p>
+                        <p className={`text-sm font-semibold ${toneClass(toPercent(aiDetectResult.text_detection.ai_probability ?? aiDetectResult.text_detection.probability, 0))}`}>
+                          {toPercent(aiDetectResult.text_detection.ai_probability ?? aiDetectResult.text_detection.probability, 0)}%
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-2">
+                        <p className="text-[11px] text-slate-400">Confidence</p>
+                        <p className="text-sm font-semibold text-white">
+                          {toPercent(aiDetectResult.text_detection.confidence, 0)}%
+                        </p>
+                      </div>
+                    </div>
+
+                    {Array.isArray(aiDetectResult.text_detection.reasoning) && aiDetectResult.text_detection.reasoning.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-xs uppercase tracking-wide text-slate-400 mb-1">Key Findings</p>
+                        <ul className="list-disc list-inside text-xs text-slate-300 space-y-1 leading-relaxed break-words">
+                          {aiDetectResult.text_detection.reasoning.slice(0, 3).map((point, idx) => (
+                            <li key={idx}>{point}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {aiDetectResult.text_detection.method && (
+                      <p className="text-[11px] text-slate-500 mt-3 break-all">Method: {aiDetectResult.text_detection.method}</p>
+                    )}
+                  </div>
+                )}
+                {aiDetectResult.media_detection && (
+                  <div className="w-full min-w-0 overflow-hidden p-4 rounded-xl bg-white/5 border border-white/10">
+                    <p className="text-xs uppercase tracking-wide text-slate-400 mb-2">Media Detection Report</p>
+                    <p className="text-base text-white font-semibold mb-3">{getMediaVerdict(aiDetectResult.media_detection)}</p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-2">
+                        <p className="text-[11px] text-slate-400">AI Probability</p>
+                        <p className={`text-sm font-semibold ${toneClass(toPercent(aiDetectResult.media_detection.ai_probability ?? aiDetectResult.media_detection.deepfake_probability ?? aiDetectResult.media_detection.overall_probability, 0))}`}>
+                          {toPercent(aiDetectResult.media_detection.ai_probability ?? aiDetectResult.media_detection.deepfake_probability ?? aiDetectResult.media_detection.overall_probability, 0)}%
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-2">
+                        <p className="text-[11px] text-slate-400">Confidence</p>
+                        <p className="text-sm font-semibold text-white">
+                          {toPercent(aiDetectResult.media_detection.confidence, toPercent((Math.abs((aiDetectResult.media_detection.overall_probability ?? 0) - 0.5) * 200), 0))}%
+                        </p>
+                      </div>
+                      {aiDetectResult.media_detection.huggingface_score != null && (
+                        <div className="rounded-lg border border-white/10 bg-black/20 p-2">
+                          <p className="text-[11px] text-slate-400">Hugging Face Score</p>
+                          <p className={`text-sm font-semibold ${toneClass(toPercent(aiDetectResult.media_detection.huggingface_score, 0))}`}>
+                            {toPercent(aiDetectResult.media_detection.huggingface_score, 0)}%
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {aiDetectResult.media_detection.prediction && (
+                      <p className="text-xs text-slate-300 mt-1">Model prediction: {aiDetectResult.media_detection.prediction}</p>
+                    )}
+                    {aiDetectResult.media_detection.borderline && (
+                      <p className="text-xs text-amber-300 mt-1">Borderline confidence, verify with additional evidence.</p>
+                    )}
+                    {Array.isArray(aiDetectResult.media_detection.analysis) && aiDetectResult.media_detection.analysis.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-xs uppercase tracking-wide text-slate-400 mb-1">Key Findings</p>
+                        <ul className="list-disc list-inside text-xs text-slate-300 space-y-1 leading-relaxed break-words">
+                          {aiDetectResult.media_detection.analysis.slice(0, 3).map((point, idx) => (
+                            <li key={idx}>{point}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {aiDetectResult.media_detection.explanation && (
+                      <p className="text-xs text-slate-300 mt-2 leading-relaxed break-words">{aiDetectResult.media_detection.explanation}</p>
+                    )}
+                    {aiDetectResult.media_detection.method && (
+                      <p className="text-[11px] text-slate-500 mt-3 break-all">Method: {aiDetectResult.media_detection.method}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </motion.div>
+        ) : !loading ? (
           <motion.form 
             key="form"
             initial={{ opacity: 0 }} 
@@ -252,6 +487,7 @@ export default function Verify() {
                 )}
               </AnimatePresence>
             </div>
+
           </motion.form>
         ) : (
           <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>

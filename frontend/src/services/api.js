@@ -32,6 +32,9 @@ export const authAPI = {
 export const verifyAPI = {
   verify: (data) => api.post('/verify/', data),
   getReport: (id) => api.get(`/verify/${id}`),
+  aiDetect: (formData) => api.post('/verify/ai-detect', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
 }
 
 export const historyAPI = {

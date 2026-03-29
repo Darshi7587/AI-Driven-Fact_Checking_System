@@ -383,6 +383,11 @@ function detectionTone(probability = 0) {
   return { chip: 'bg-amber-500/20 text-amber-300 border-amber-500/30', text: 'Uncertain' }
 }
 
+function formatPct(value = 0) {
+  const pct = (Number(value) || 0) * 100
+  return `${pct.toFixed(1)}%`
+}
+
 function getHallucinationRisk(hallucinationCount = 0, totalClaims = 0) {
   if (totalClaims <= 0) {
     return { label: 'Low', cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' }
@@ -490,6 +495,21 @@ export default function Report() {
         return labels[status] || 'Unverifiable'
       }
 
+      const simpleOutcome = (status) => {
+        if (status === 'TRUE') return 'Right (Likely True)'
+        if (status === 'FALSE') return 'Wrong (Likely False)'
+        if (status === 'PARTIALLY_TRUE') return 'Partly Right (Mixed)'
+        if (status === 'CONFLICTING') return 'Uncertain (Conflicting Reports)'
+        return 'Uncertain (Not Enough Evidence)'
+      }
+
+      const shortWhy = (claim) => {
+        const source = String(claim?.key_finding || claim?.reasoning || '').trim()
+        if (!source) return 'Not enough direct evidence was found to make a stronger conclusion.'
+        const firstSentence = source.split(/(?<=[.!?])\s+/)[0]
+        return clipText(firstSentence || source, 220)
+      }
+
       const generatedAt = new Date().toLocaleString()
       addWrappedText('VeritAI Fact-Check Report', { fontSize: 16, fontStyle: 'bold', color: [2, 6, 23], lineHeight: 7, spacingAfter: 2 })
       addWrappedText(`Export Type: ${preset.label}`, { fontSize: 10, fontStyle: 'bold', color: [30, 64, 175], spacingAfter: 1 })
@@ -501,21 +521,27 @@ export default function Report() {
       addDivider()
 
       addWrappedText('Summary', { fontSize: 13, fontStyle: 'bold', color: [15, 23, 42], spacingAfter: 2 })
-      addWrappedText(`Overall Accuracy: ${Math.round((report.overall_accuracy || 0) * 100)}%`, { fontSize: 10 })
-      addWrappedText(`Trust Score: ${Math.round((report.trust_score || 0) * 100)}%`, { fontSize: 10 })
-      addWrappedText(`Average Claim Confidence: ${Math.round(((report.avg_confidence ?? (report.claims || []).reduce((sum, c) => sum + (c.confidence || 0), 0) / Math.max((report.claims || []).length, 1)) || 0) * 100)}%`, { fontSize: 10 })
-      addWrappedText(`Total Claims: ${report.total_claims || 0}`, { fontSize: 10 })
-      addWrappedText(`True: ${report.true_count || 0} | False: ${report.false_count || 0} | Partial: ${report.partial_count || 0} | Unverifiable: ${report.unverifiable_count || 0} | Conflicting: ${report.conflicting_count || 0}`, { fontSize: 10 })
-      const pdfHallucinationRisk = getHallucinationRisk(report.hallucination_count || 0, report.total_claims || 0)
-      addWrappedText(`Hallucination Risk: ${pdfHallucinationRisk.label} (${report.hallucination_count || 0}/${report.total_claims || 0}) | Processing Time: ${report.processing_time || 0}s`, { fontSize: 10 })
-      if (report.ai_text_detection) {
-        addWrappedText(`AI-Generated Text Probability: ${Math.round((report.ai_text_detection.probability || 0) * 100)}% (${report.ai_text_detection.label || 'unknown'})`, { fontSize: 10 })
-      }
-      if (report.ai_media_detection) {
-        addWrappedText(`AI-Generated Media Probability: ${Math.round((report.ai_media_detection.overall_probability || 0) * 100)}% (${report.ai_media_detection.label || 'unknown'})`, { fontSize: 10 })
+      if (presetKey === 'summary') {
+        addWrappedText(`Total Questions Checked: ${report.total_claims || 0}`, { fontSize: 10 })
+        addWrappedText(`Right: ${report.true_count || 0} | Wrong: ${report.false_count || 0} | Mixed: ${report.partial_count || 0} | Uncertain: ${(report.unverifiable_count || 0) + (report.conflicting_count || 0)}`, { fontSize: 10 })
+        addWrappedText(`Generated in ${report.processing_time || 0}s`, { fontSize: 10 })
+      } else {
+        addWrappedText(`Overall Accuracy: ${Math.round((report.overall_accuracy || 0) * 100)}%`, { fontSize: 10 })
+        addWrappedText(`Trust Score: ${Math.round((report.trust_score || 0) * 100)}%`, { fontSize: 10 })
+        addWrappedText(`Average Claim Confidence: ${Math.round(((report.avg_confidence ?? (report.claims || []).reduce((sum, c) => sum + (c.confidence || 0), 0) / Math.max((report.claims || []).length, 1)) || 0) * 100)}%`, { fontSize: 10 })
+        addWrappedText(`Total Claims: ${report.total_claims || 0}`, { fontSize: 10 })
+        addWrappedText(`True: ${report.true_count || 0} | False: ${report.false_count || 0} | Partial: ${report.partial_count || 0} | Unverifiable: ${report.unverifiable_count || 0} | Conflicting: ${report.conflicting_count || 0}`, { fontSize: 10 })
+        const pdfHallucinationRisk = getHallucinationRisk(report.hallucination_count || 0, report.total_claims || 0)
+        addWrappedText(`Hallucination Risk: ${pdfHallucinationRisk.label} (${report.hallucination_count || 0}/${report.total_claims || 0}) | Processing Time: ${report.processing_time || 0}s`, { fontSize: 10 })
+        if (report.ai_text_detection) {
+          addWrappedText(`AI-Generated Text Probability: ${Math.round((report.ai_text_detection.probability || 0) * 100)}% (${report.ai_text_detection.label || 'unknown'})`, { fontSize: 10 })
+        }
+        if (report.ai_media_detection) {
+          addWrappedText(`AI-Generated Media Probability: ${Math.round((report.ai_media_detection.overall_probability || 0) * 100)}% (${report.ai_media_detection.label || 'unknown'})`, { fontSize: 10 })
+        }
       }
 
-      if (report.ai_text_detection?.indicators?.length) {
+      if (presetKey !== 'summary' && report.ai_text_detection?.indicators?.length) {
         addWrappedText('Text Detection Indicators', { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
         report.ai_text_detection.indicators.forEach((item) => {
           addWrappedText(`- ${item}`, { fontSize: 9, color: [51, 65, 85], indent: 2, spacingAfter: 0.5 })
@@ -545,6 +571,23 @@ export default function Report() {
 
       ;(report.claims || []).forEach((claim, claimIdx) => {
         ensureSpace(10)
+        if (presetKey === 'summary') {
+          addWrappedText(`Question ${claimIdx + 1}`, { fontSize: 12, fontStyle: 'bold', color: [15, 23, 42], spacingAfter: 1 })
+          addWrappedText(`You asked: ${claim.text}`, { fontSize: 10, color: [2, 6, 23], spacingAfter: 1 })
+          addWrappedText(`Answer: ${simpleOutcome(claim.status)}`, { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
+          addWrappedText(`Why: ${shortWhy(claim)}`, { fontSize: 9, color: [30, 41, 59], spacingAfter: 2 })
+
+          const links = (claim.sources || []).slice(0, 2).map((s) => s.url).filter(Boolean)
+          if (links.length) {
+            addWrappedText('Proof Links', { fontSize: 10, fontStyle: 'bold', color: [30, 41, 59], spacingAfter: 1 })
+            links.forEach((url) => {
+              addWrappedText(`- ${url}`, { fontSize: 8, color: [30, 64, 175], indent: 2, spacingAfter: 0.5 })
+            })
+          }
+          addDivider()
+          return
+        }
+
         addWrappedText(`Claim ${claimIdx + 1}`, { fontSize: 12, fontStyle: 'bold', color: [15, 23, 42], spacingAfter: 1 })
         addWrappedText(claim.text, { fontSize: 10, color: [2, 6, 23], spacingAfter: 2 })
 
@@ -798,7 +841,7 @@ export default function Report() {
                 )}
               </div>
 
-              <p className="mt-2 text-2xl font-display font-black text-white">{Math.round((textDetection.probability || 0) * 100)}%</p>
+              <p className="mt-2 text-2xl font-display font-black text-white">{formatPct(textDetection.probability || 0)}</p>
               <p className="text-slate-500 text-xs">Method: {textDetection.method || 'heuristic-v1'}</p>
               {textDetection.indicators?.length > 0 && (
                 <ul className="mt-3 space-y-1">
@@ -814,7 +857,7 @@ export default function Report() {
                 <p className="text-slate-300 text-sm font-medium">AI-Generated Media Detection</p>
                 <span className={`text-xs px-2 py-1 rounded-full border ${mediaTone.chip}`}>{mediaTone.text}</span>
               </div>
-              <p className="mt-2 text-2xl font-display font-black text-white">{Math.round((mediaDetection.overall_probability || 0) * 100)}%</p>
+              <p className="mt-2 text-2xl font-display font-black text-white">{formatPct(mediaDetection.overall_probability || 0)}</p>
               <p className="text-slate-500 text-xs">Analyzed Media: {mediaDetection.analyzed_count || 0}</p>
               {mediaDetection.note && <p className="text-slate-500 text-xs mt-1">{mediaDetection.note}</p>}
               {mediaDetection.items?.length > 0 && (

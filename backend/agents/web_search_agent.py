@@ -4,7 +4,7 @@ from services.search_service import multi_search
 from typing import List, Dict
 import asyncio
 import re
-from config import MAX_SEARCH_RESULTS_PER_QUERY
+from config import MAX_SEARCH_RESULTS_PER_QUERY, FAST_PIPELINE_MODE, FAST_MAX_SEARCH_RESULTS_PER_QUERY
 
 
 def _normalize(text: str) -> str:
@@ -20,6 +20,31 @@ def _claim_keywords(claim: str) -> List[str]:
         "as", "be", "been", "being", "about", "around", "approximately", "latest", "data", "official", "source",
     }
     return [t for t in tokens if len(t) > 2 and t not in stop]
+
+
+def _named_entities(claim: str) -> List[str]:
+    entities = re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b", claim or "")
+    stop = {"The", "This", "That", "These", "Those", "It", "He", "She", "They", "In", "On", "At"}
+    unique = []
+    seen = set()
+    for e in entities:
+        token = e.strip()
+        if token in stop:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(token)
+    return unique[:4]
+
+
+def _has_entity_alignment(claim: str, source_text: str) -> bool:
+    entities = _named_entities(claim)
+    if not entities:
+        return True
+    text = _normalize(source_text)
+    return any(_normalize(entity) in text for entity in entities)
 
 
 def _anchor_aliases_for_claim(claim: str) -> List[List[str]]:
@@ -77,12 +102,21 @@ def _relevance_score(claim: str, title: str, snippet: str) -> float:
     combined = f"{title}. {snippet}"
     overlap = _keyword_overlap_ratio(claim, combined)
     anchor_bonus = 0.2 if _passes_anchor_check(claim, combined) else -0.25
-    return max(0.0, min(1.0, overlap + anchor_bonus))
+    entity_bonus = 0.12 if _has_entity_alignment(claim, combined) else -0.18
+    return max(0.0, min(1.0, overlap + anchor_bonus + entity_bonus))
 
 
 def _authority_boost_queries(claim: str) -> List[str]:
     text = _normalize(claim)
     base = []
+    if any(k in text for k in ["war", "ceasefire", "truce", "conflict", "israel", "iran", "russia", "ukraine", "gaza", "hamas"]):
+        base.extend([
+            f"{claim} site:reuters.com",
+            f"{claim} site:apnews.com",
+            f"{claim} site:bbc.com",
+            f"{claim} site:aljazeera.com",
+        ])
+        return base
     if any(k in text for k in ["chandrayaan", "isro", "moon", "lunar"]):
         base.extend([
             f"{claim} site:isro.gov.in",
@@ -112,7 +146,8 @@ async def search_and_collect_evidence(claim: str, queries: List[str]) -> List[Di
     """
     Search for evidence and collect structured source data.
     """
-    raw_results = await multi_search(queries, max_results=max(2, MAX_SEARCH_RESULTS_PER_QUERY))
+    max_results = FAST_MAX_SEARCH_RESULTS_PER_QUERY if FAST_PIPELINE_MODE else MAX_SEARCH_RESULTS_PER_QUERY
+    raw_results = await multi_search(queries[:2] if FAST_PIPELINE_MODE else queries, max_results=max(2, max_results))
     
     evidence_sources = []
     for result in raw_results:
@@ -134,6 +169,9 @@ async def search_and_collect_evidence(claim: str, queries: List[str]) -> List[Di
         # If claim contains event anchors like "landed", enforce direct lexical relevance.
         if not _passes_anchor_check(claim, f"{title}. {snippet}"):
             continue
+
+        if not _has_entity_alignment(claim, f"{title}. {snippet}"):
+            continue
         
         evidence_sources.append({
             "url": url,
@@ -146,7 +184,7 @@ async def search_and_collect_evidence(claim: str, queries: List[str]) -> List[Di
         })
 
     # If we still lack relevant sources, run a targeted second pass for authoritative domains.
-    if len(evidence_sources) < 3:
+    if (not FAST_PIPELINE_MODE) and len(evidence_sources) < 3:
         boosted_queries = _authority_boost_queries(claim)
         boosted_results = await multi_search(boosted_queries, max_results=max(2, MAX_SEARCH_RESULTS_PER_QUERY))
         seen_urls = {s["url"] for s in evidence_sources}
@@ -159,6 +197,8 @@ async def search_and_collect_evidence(claim: str, queries: List[str]) -> List[Di
 
             relevance = _relevance_score(claim, title, snippet)
             if relevance < 0.22 or not _passes_anchor_check(claim, f"{title}. {snippet}"):
+                continue
+            if not _has_entity_alignment(claim, f"{title}. {snippet}"):
                 continue
 
             seen_urls.add(url)
@@ -197,7 +237,12 @@ async def search_and_collect_evidence(claim: str, queries: List[str]) -> List[Di
         if len(selected) >= 5:
             break
 
-    top_sources = selected[:5]  # Keep top sources compact for speed and quality
+    top_sources = selected[:3] if FAST_PIPELINE_MODE else selected[:5]  # Keep top sources compact for speed and quality
+
+    if FAST_PIPELINE_MODE:
+        for src in top_sources:
+            src.pop("relevance_score", None)
+        return top_sources
 
     semaphore = asyncio.Semaphore(3)
 

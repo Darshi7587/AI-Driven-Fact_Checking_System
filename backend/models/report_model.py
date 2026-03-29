@@ -38,6 +38,8 @@ class AITextDetection(BaseModel):
     label: str
     confidence: float
     indicators: List[str] = []
+    content_bytes_analyzed: bool = False
+    confidence_calibration_note: str = ""
     method: str = "heuristic-v1"
 
 
@@ -47,6 +49,8 @@ class AIMediaItem(BaseModel):
     domain: str
     trust_score: float
     synthetic_probability: float
+    content_bytes_analyzed: bool = False
+    confidence_calibration_note: str = ""
     flags: List[str] = []
 
 
@@ -56,6 +60,8 @@ class AIMediaDetection(BaseModel):
     analyzed_count: int
     items: List[AIMediaItem] = []
     note: str = ""
+    content_bytes_analyzed: bool = False
+    confidence_calibration_note: str = ""
     method: str = "heuristic-media-v1"
 
 class VerificationReport(BaseModel):
@@ -65,6 +71,8 @@ class VerificationReport(BaseModel):
     input_type: str  # "text" or "url"
     source_url: Optional[str] = None
     claims: List[Claim]
+    gemini_precheck: Dict[str, Any] = {}
+    gemini_adjudication: Dict[str, Any] = {}
     overall_accuracy: float
     trust_score: float = 0.0
     avg_confidence: float = 0.0

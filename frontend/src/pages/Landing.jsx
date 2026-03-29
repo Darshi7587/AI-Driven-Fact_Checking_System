@@ -123,7 +123,7 @@ export default function Landing() {
             </motion.div>
 
             <h1 className="font-display font-black text-5xl md:text-7xl leading-tight mb-6">
-              <span className="text-white">The World's Most</span>
+              <span className="text-white">The Most</span>
               <br />
               <span className="gradient-text">Advanced Fact-Checker</span>
             </h1>

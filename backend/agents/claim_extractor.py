@@ -2,6 +2,7 @@ from services.gemini_service import call_gemini, extract_json_from_text
 from services.scraper_service import scrape_url
 from typing import List, Dict
 import re
+from config import FAST_PIPELINE_MODE
 
 
 def _extract_primary_entity(text: str) -> str:
@@ -36,6 +37,102 @@ def _is_temporal_claim(text: str) -> bool:
     return any(token in lowered for token in temporal_tokens)
 
 
+def _normalize_claim_spacing(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    # Fix common merged-token artifacts from scraped text.
+    merged_fixes = {
+        r"\bapplehas\b": "apple has",
+        r"\blikechatgpt\b": "like chatgpt",
+        r"\bapples\b": "apple's",
+        r"\bexpectedto\b": "expected to",
+        r"\bcompanyannounced\b": "company announced",
+        r"\btheapple\b": "the apple",
+        r"\bdeveloperyoutube\b": "developer youtube",
+        r"\bonthe\b": "on the",
+    }
+    lowered = cleaned.lower()
+    for pattern, replacement in merged_fixes.items():
+        lowered = re.sub(pattern, replacement, lowered)
+    # Restore sentence capitalization simply.
+    return lowered[:1].upper() + lowered[1:] if lowered else lowered
+
+def _is_structurally_sound_claim(text: str) -> bool:
+    cleaned = (text or "").strip().strip('"').strip("'")
+    if len(cleaned) < 20:
+        return False
+
+    lowered = cleaned.lower()
+    if re.search(r"\b(when|while|because|although|if|unless)\b", lowered) and "," not in cleaned:
+        return False
+
+    # Avoid malformed fragments produced by aggressive clause splitting.
+    malformed_patterns = [
+        r"\bwhen\b.+\b(is|are|was|were)\b.+\bpreserving\b",
+        r"\bhas\s+even\s+centrali[sz]ed\s+control\b",
+        r"\bsource\s+article\s*\(input\s+url\)\b",
+    ]
+    if any(re.search(p, lowered) for p in malformed_patterns):
+        return False
+
+    # Require at least one clause verb.
+    return bool(re.search(r"\b(is|are|was|were|has|have|had|announced|confirmed|reported|said|stated|led|organized|organised|built|focused|focuses|includes|consists)\b", lowered))
+
+
+def _is_speculative_claim(text: str) -> bool:
+    lowered = (text or "").lower()
+    speculative_markers = [
+        "expected to", "might", "may ", "likely", "rumored", "rumour", "could",
+        "possibly", "potentially", "anticipated", "forecast",
+    ]
+    factual_anchors = [
+        "announced", "confirmed", "press release", "will be held", "scheduled",
+        "from ", " on ", " june", " july", " august", " september", " october", " november", " december",
+        " january", " february", " march", " april", " may", " event", "conference",
+        "signed a deal", "partnership", "introduced", "brought", "integrates", "xcode",
+    ]
+    has_speculative = any(m in lowered for m in speculative_markers)
+    has_factual_anchor = any(a in lowered for a in factual_anchors) or bool(re.search(r"\b(19|20)\d{2}\b", lowered))
+
+    # If speculative language is present alongside a hard factual anchor, keep only when it is primarily factual.
+    if has_speculative and has_factual_anchor:
+        hard_facts = ["announced", "confirmed", "will be held", "signed a deal", "introduced", "brought"]
+        return not any(h in lowered for h in hard_facts)
+
+    return has_speculative and not has_factual_anchor
+
+
+def _is_low_value_metadata_claim(text: str) -> bool:
+    lowered = (text or "").lower().strip()
+    metadata_markers = [
+        "you can contact", "verify outreach", "based out of", "covers global", "signal",
+        "founder summit", "newsletters", "podcasts", "partner content", "contact us",
+        "staff events", "strictlyvc", "brand studio", "actively scaling", "fundraising",
+        "delve accused", "an exclusive tour", "employees had to", "nothing ceo",
+    ]
+    if any(m in lowered for m in metadata_markers):
+        return True
+
+    # Filter person-bio snippets that are not product/event facts.
+    if re.match(r"^(he|she|they)\s+", lowered):
+        factual_tokens = ["announced", "launched", "released", "conference", "event", "wwdc", "apple", "google", "xcode", "siri"]
+        if not any(t in lowered for t in factual_tokens):
+            return True
+
+    return False
+
+
+def _claim_priority(text: str) -> int:
+    lowered = (text or "").lower()
+    has_date = bool(re.search(r"\b(19|20)\d{2}\b", lowered)) or bool(
+        re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", lowered)
+    )
+    if "announced" in lowered or "confirmed" in lowered:
+        return 3
+    if has_date or "will be held" in lowered or "scheduled" in lowered:
+        return 2
+    return 1
+
+
 def _rule_based_claim_fallback(text: str) -> List[Dict]:
     """Fallback extraction when LLM output is malformed or empty."""
     sentences = re.split(r'(?<=[.!?])\s+|\n+', text)
@@ -45,9 +142,14 @@ def _rule_based_claim_fallback(text: str) -> List[Dict]:
 
     for sentence in sentences:
         for claim_text in _split_compound_claim(sentence):
-            claim_text = claim_text.strip().strip('"').strip("'")
+            claim_text = _normalize_claim_spacing(claim_text.strip().strip('"').strip("'"))
             claim_text = _resolve_leading_pronoun(claim_text, primary_entity)
             if len(claim_text) < 20:
+                continue
+
+            if _is_speculative_claim(claim_text):
+                continue
+            if _is_low_value_metadata_claim(claim_text):
                 continue
 
             # Filter subjective statements
@@ -71,6 +173,7 @@ def _rule_based_claim_fallback(text: str) -> List[Dict]:
                 "claim_text": claim_text,
                 "is_temporal": _is_temporal_claim(claim_text),
                 "category": "other",
+                "priority": _claim_priority(claim_text),
             })
 
             if len(claims) >= 10:
@@ -80,6 +183,9 @@ def _rule_based_claim_fallback(text: str) -> List[Dict]:
             break
 
     if claims:
+        claims.sort(key=lambda c: c.get("priority", 1), reverse=True)
+        for c in claims:
+            c.pop("priority", None)
         return claims
 
     # Last-resort synthesis for dashboard/data pages where scraped text is metadata-like.
@@ -137,11 +243,11 @@ def _rule_based_claim_fallback(text: str) -> List[Dict]:
             "category": "other",
         })
 
-    # Fallback: if compact is short and non-boilerplate, wrap it
+    # Fallback: if compact is short and non-boilerplate, use raw compact text
     if not generated_claims and len(compact) > 10 and len(compact) < 150:
         clean = compact.replace("|", " ").replace("-", " ").strip()
         if len(clean) > 10:
-            synthesized = f"The page reports: {clean}"
+            synthesized = clean.rstrip(".") + "."
             generated_claims.append({
                 "claim_text": synthesized,
                 "is_temporal": _is_temporal_claim(synthesized),
@@ -255,10 +361,8 @@ def _split_compound_claim(sentence: str) -> List[str]:
                     normalized = f"{subject} {normalized}"
             elif not re.search(r"\b(is|are|was|were|has|have|had|can|could|may|might|will|would|should|must|became|ranked|reached|reported|announced|overtook|lead|leads|cause|causes|face|faces|faced|remain|remains)\b", lowered):
                 # Fragment has no linking verb, so attach subject + "is" or "has"
-                if re.search(r"\b[a-z]+ing\b", lowered):  # Gerund like "growing"
-                    normalized = f"{subject} is {normalized}"
-                else:
-                    normalized = f"{subject} has {normalized}"
+                    # Skip low-quality fragments instead of fabricating missing grammar.
+                    continue
             else:
                 # Has a verb: prepend subject only when fragment begins with a predicate token
                 # such as "is ...", "was ...", "has ..." where subject is clearly omitted.
@@ -311,6 +415,8 @@ async def extract_claims(text: str) -> List[Dict]:
     sentence_count = len([s for s in re.split(r'(?<=[.!?])\s+|\n+', text) if s.strip()])
     primary_entity = _extract_primary_entity(text)
     direct_claims = _rule_based_claim_fallback(text)
+    if FAST_PIPELINE_MODE and direct_claims:
+        return direct_claims[:6]
     if len((text or "").strip()) <= 1200 and sentence_count <= 8 and direct_claims:
         return direct_claims[:10]
 
@@ -358,8 +464,18 @@ Return ONLY a valid JSON array (no markdown, no extra text):
             raw_claim_text = str(claim.get("claim_text", "")).strip()
             for claim_text in _split_compound_claim(raw_claim_text):
                 claim_text = claim_text.strip()
+                claim_text = _normalize_claim_spacing(claim_text)
                 claim_text = _resolve_leading_pronoun(claim_text, primary_entity)
                 if len(claim_text) < 20:
+                    continue
+
+                if not _is_structurally_sound_claim(claim_text):
+                    continue
+                if not _is_structurally_sound_claim(claim_text):
+                    continue
+                if _is_speculative_claim(claim_text):
+                    continue
+                if _is_low_value_metadata_claim(claim_text):
                     continue
                 if not _looks_verifiable(claim_text):
                     continue
@@ -369,6 +485,7 @@ Return ONLY a valid JSON array (no markdown, no extra text):
                     "claim_text": claim_text,
                     "is_temporal": bool(claim.get("is_temporal", False)) or _is_temporal_claim(claim_text),
                     "category": str(claim.get("category", "other")),
+                    "priority": _claim_priority(claim_text),
                 })
 
         if valid:
@@ -380,6 +497,9 @@ Return ONLY a valid JSON array (no markdown, no extra text):
                     continue
                 seen.add(key)
                 deduped.append(c)
+            deduped.sort(key=lambda c: c.get("priority", 1), reverse=True)
+            for c in deduped:
+                c.pop("priority", None)
             return deduped[:10]
 
     return _rule_based_claim_fallback(text)

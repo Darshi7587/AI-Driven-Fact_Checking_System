@@ -24,6 +24,7 @@ HIGH_TRUST_DOMAINS = {
     "un.org": 0.95,
     "worldbank.org": 0.92,
     "imf.org": 0.92,
+    "apple.com": 0.93,
     # Scientific and academic
     "nature.com": 0.95,
     "sciencedirect.com": 0.93,
@@ -37,6 +38,7 @@ HIGH_TRUST_DOMAINS = {
 MEDIUM_TRUST_DOMAINS = {
     "congress.gov": 0.78,
     "wikipedia.org": 0.70,
+    "scientificamerican.com": 0.86,
     "snopes.com": 0.80,
     "factcheck.org": 0.85,
     "politifact.com": 0.82,
@@ -46,6 +48,8 @@ MEDIUM_TRUST_DOMAINS = {
     "techcrunch.com": 0.75,
     "wired.com": 0.78,
     "timesofindia.indiatimes.com": 0.72,
+    "toiimg.com": 0.72,
+    "indiatimes.com": 0.70,
     "ndtv.com": 0.74,
     "hindustantimes.com": 0.73,
     "medium.com": 0.45,
@@ -66,6 +70,24 @@ LOW_TRUST_TLDS = {".xyz", ".buzz", ".click", ".top", ".gq", ".work"}
 LOW_TRUST_TOKENS = {
     "viral", "truthnews", "breaking-news", "worldtruth", "dailynews247", "exposed", "uncensored"
 }
+
+
+def _truncate_on_sentence_boundary(text: str, max_chars: int) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "")).strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    truncated = cleaned[:max_chars]
+    # Prefer truncating at the last complete sentence to avoid malformed claim fragments.
+    last_punct = max(truncated.rfind("."), truncated.rfind("!"), truncated.rfind("?"))
+    if last_punct >= int(max_chars * 0.6):
+        return truncated[: last_punct + 1].strip()
+
+    # Fallback to a word boundary when no sentence end is available.
+    last_space = truncated.rfind(" ")
+    if last_space > 0:
+        return truncated[:last_space].strip()
+    return truncated.strip()
 
 
 def _domain_from_url(url: str) -> str:
@@ -159,7 +181,7 @@ async def scrape_url(url: str, timeout: int = 10) -> Optional[str]:
             text = " ".join(candidates)
 
             if text:
-                return text[:3000]
+                return _truncate_on_sentence_boundary(text, 3800)
 
             # Fallback for JS-heavy dashboards/data pages with sparse paragraph text.
             title = (soup.title.get_text(strip=True) if soup.title else "")
@@ -195,7 +217,7 @@ async def scrape_url(url: str, timeout: int = 10) -> Optional[str]:
                 fallback_parts.append(url_hint)
             
             fallback_text = " ".join(fallback_parts).strip()
-            return fallback_text[:2000] if fallback_text else None
+            return _truncate_on_sentence_boundary(fallback_text, 2000) if fallback_text else None
     except Exception:
         return None
 

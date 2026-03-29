@@ -1,11 +1,14 @@
-from duckduckgo_search import DDGS
+try:
+    from ddgs import DDGS
+except Exception:
+    from duckduckgo_search import DDGS
 from typing import List, Dict
 import asyncio
 from tenacity import retry, stop_after_attempt, wait_exponential
 import httpx
-from config import TAVILY_API_KEY, SEARCH_QUERY_CONCURRENCY
+from config import TAVILY_API_KEY, SEARCH_QUERY_CONCURRENCY, FAST_PIPELINE_MODE
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5))
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.5, min=0.2, max=1.5))
 def search_web(query: str, max_results: int = 5) -> List[Dict]:
     """Search the web using DuckDuckGo with retry logic."""
     results = []
@@ -40,8 +43,9 @@ async def search_tavily(query: str, max_results: int = 5) -> List[Dict]:
         "include_raw_content": False,
     }
 
+    timeout_s = 8 if FAST_PIPELINE_MODE else 15
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
             response = await client.post("https://api.tavily.com/search", json=payload)
             response.raise_for_status()
             data = response.json()

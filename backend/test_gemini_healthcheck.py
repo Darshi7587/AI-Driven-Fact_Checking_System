@@ -1,7 +1,7 @@
 import sys
 import time
 
-from services.gemini_service import _gemini_api_keys, get_gemini_model
+from services.gemini_service import _gemini_api_keys, _generate_with_gemini_sdk
 
 
 def mask_key(key: str) -> str:
@@ -27,9 +27,8 @@ def main() -> int:
     for i, key in enumerate(keys, start=1):
         label = f"KEY-{i} ({mask_key(key)})"
         try:
-            model = get_gemini_model(key)
-            response = model.generate_content("Reply with exactly: OK")
-            text = (getattr(response, "text", "") or "").strip()
+            response = _generate_with_gemini_sdk(api_key=key, prompt="Reply with exactly: OK")
+            text = (response or "").strip()
             if text:
                 print(f"[PASS] {label} -> {text[:80]}")
             else:
